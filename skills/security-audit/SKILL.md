@@ -51,9 +51,11 @@ Additional bindings:
   target-controlled code. Read source only and record every execution-dependent candidate as
   `needs_validation`. `audit-hunter` and `audit-verifier` are given no `Write` or `Edit` access, so
   the parent alone writes run artifacts.
-- **Validators require Node.js.** Phases 4 and 5 call `validate-findings.cjs` and
-  `validate-coverage-ledger.cjs` through the `Bash` tool. If `node` is not available in the
-  environment, report the missing validator as a run blocker instead of fabricating a passing
+- **Validators run on Python 3 (or Node.js).** Phases 4 and 5 call
+  `validate-findings.py` / `validate-coverage-ledger.py` through the `Bash` tool with `python3`,
+  which is present on essentially every Linux host. The byte-faithful Node originals
+  (`validate-*.cjs`) remain available if you prefer them. If neither `python3` nor `node` is
+  available, report the missing validator as a run blocker instead of fabricating a passing
   validation.
 
 ## Universal execution safety
@@ -200,7 +202,7 @@ In full audit mode, follow all six phases in order:
 1. **Reconnaissance** — map the source, trust boundaries, local build paths, companion selections, prior evidence, and initial deterministic coverage ledger with [RECONNAISSANCE.md](RECONNAISSANCE.md).
 2. **Coverage-led hunting waves** — assign isolated hunters from the ledger and collect structured candidate results with [HUNTING.md](HUNTING.md), [ATTACK-CLASSES.md](ATTACK-CLASSES.md), and the selected domain companions.
 3. **Candidate validation** — consolidate fingerprints and give every candidate to a fresh source verifier as defined in [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md).
-4. **Structured output** — write all final `confirmed`, `needs_validation`, and `rejected` records to `findings.json`; validate it with `report-schema.json` and `validate-findings.cjs`, and validate the coverage claim with `validate-coverage-ledger.cjs`.
+4. **Structured output** — write all final `confirmed`, `needs_validation`, and `rejected` records to `findings.json`; validate it with `report-schema.json` and `validate-findings.py` (or `validate-findings.cjs`), and validate the coverage claim with `validate-coverage-ledger.py` (or `.cjs`).
 5. **Independent record verification** — use fresh agents to verify final source claims and reconcile corrections or state changes.
 6. **Target-neutral report** — derive `REPORT.md`, `FINDINGS-DETAIL.md`, and `NEEDS-VALIDATION.md` from the final records, with no live-probe instructions.
 

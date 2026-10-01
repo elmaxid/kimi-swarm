@@ -14,9 +14,9 @@ Before delegating:
 2. Confirm whether an **OS-enforced sandbox** is available. Unless it is, run **static-only**: read
    source and record every execution-dependent candidate as `needs_validation`. Never execute
    target-controlled code without the sandbox controls the skill requires.
-3. Check that `node` is available for `validate-findings.cjs` and `validate-coverage-ledger.cjs`
-   (Phases 4–5). If it is missing, report it as a run blocker instead of claiming a passing
-   validation.
+3. Check that `python3` is available for `validate-findings.py` and `validate-coverage-ledger.py`
+   (Phases 4–5); the Node originals `validate-*.cjs` work too if Node is present. If neither runtime
+   is available, report it as a run blocker instead of claiming a passing validation.
 4. Resolve the skill directory (this plugin's `skills/security-audit`), the target root, the repo
    name, and an output directory **outside** the target (default `~/security-audit-skill/<repo>/run-<N>`).
 

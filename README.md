@@ -15,7 +15,7 @@ completo de auditoría de seguridad de Cloudflare, adaptado a Kimi.
 - [Uso](#uso)
 - [Personas incluidas](#personas-incluidas)
 - [Auditoría de seguridad completa](#auditoría-de-seguridad-completa)
-- [Sin Node.js: port a Python](#sin-nodejs-port-a-python)
+- [Validadores en Python (sin Node.js)](#validadores-en-python-sin-nodejs)
 - [Sandbox de ejecución](#sandbox-de-ejecución)
 - [Automatización y no-interactividad](#automatización-y-no-interactividad)
 - [Verificación](#verificación)
@@ -165,7 +165,9 @@ intentando **refutar** el hallazgo del cazador.
 
 ### Requisitos
 
-- **Node.js** (o el [port a Python](#sin-nodejs-port-a-python)) para `validate-*.cjs` en fases 4-5.
+- **Python 3** (presente en casi cualquier Linux) o Node.js, para los validadores de las fases 4-5.
+  El plugin ya incluye el [port a Python](#validadores-en-python-sin-nodejs), así que **no necesitás
+  instalar Node**.
 - **Sandbox** para ejecutar código del target; sin él corre **static-only** (ver abajo).
 - Ejecución larga: el workflow completo tarda. Usá `profile: quick` o un `budget` para acotarlo.
 
@@ -175,37 +177,46 @@ Sin sandbox OS-enforced, el skill **no ejecuta** código del target: lee fuente 
 dependiente de ejecución como `needs_validation`. Es un modo soportado por el propio skill, no una
 degradación — los hallazgos estáticos siguen siendo válidos y verificables.
 
-## Sin Node.js: port a Python
+## Validadores en Python (sin Node.js)
 
-Los validadores `validate-*.cjs` son las únicas partes del skill que requieren Node. Para un server
-limpio existen dos caminos:
+Los validadores son la única parte del skill que dependía de Node. **Ya están portados a Python 3
+stdlib puro** y verificados como equivalentes al original:
 
-**Opción A — port a Python (recomendado).** Los validadores son *zero-dependency* (solo `fs`, `path`,
-`util` de Node) y su lógica es un validador JSON-Schema propio más chequeos semánticos. Se pueden
-portar a Python (`json` + `os`) y los `*.test.cjs` (34 casos, `node:test`) son la suite de
-conformidad: se reescriben en `unittest` y el port se valida caso por caso contra el original.
+| Archivo | Rol |
+| --- | --- |
+| `skills/security-audit/_validate_common.py` | Helpers compartidos (propiedades Unicode, semántica JS de strings/números, lectura segura) |
+| `skills/security-audit/validate-findings.py` | Port de `validate-findings.cjs` |
+| `skills/security-audit/validate-coverage-ledger.py` | Port de `validate-coverage-ledger.cjs` |
+| `skills/security-audit/test_validators.py` | Suite de conformidad (port de los `.test.cjs`) |
+| `skills/security-audit/differential_test.py` | Compara Python vs Node: exit code, stdout y stderr |
 
-```
-scripts/validate-findings.py       # CLI: python3 validate-findings.py findings.json
-scripts/validate-coverage-ledger.py
-tests/test_validators.py           # port de los 34 casos de conformidad
-```
-
-Ventaja: cero dependencias en el server, sin Node ni npx. El costo es mantener el port cuando el
-upstream cambie (ver `THIRD-PARTY.md`).
-
-**Opción B — Node efímero, sin instalarlo.** Hay distribuciones de Node que son un solo binario
-autocontenido. Se descarga una vez a un directorio local y se referencia solo para los validadores:
+Uso:
 
 ```bash
-# Node como binario único, sin gestor de paquetes ni instalación en el sistema
+python3 <skill-dir>/validate-findings.py <output-dir>/findings.json
+python3 <skill-dir>/validate-coverage-ledger.py <output-dir>/coverage-ledger.json
+```
+
+**Verificación** (con Node efímero como oráculo, sin instalarlo en el sistema):
+
+- Conformidad Python: **65/65** casos pasan.
+- Diferencial Python vs Node: **273/273** casos con salida *byte-idéntica* (exit code, stdout y
+  stderr), sobre corpus con Unicode hostil, anidamiento profundo, duplicados, symlinks, FIFOs,
+  entradas no-UTF-8 y >5 MiB, más fuzzing aleatorio.
+- La suite Node original sigue pasando: **65/65**.
+
+Los `.cjs` quedan como fuente de verdad y referencia; el port no los reemplaza, los complementa.
+Detalle de mantenimiento en `THIRD-PARTY.md`.
+
+**Alternativa sin mantener un port** — Node como binario único autocontenido, fuera del sistema:
+
+```bash
 curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz \
   | tar -xJ --strip-components=1 -C /opt/node-portable
 /opt/node-portable/bin/node --version
 ```
 
-No toca `$PATH` ni el sistema; es un directorio que podés borrar. Ideal si querés el validador
-original sin mantener un port.
+No toca `$PATH` ni el sistema; es un directorio que podés borrar.
 
 > Nota: en algunos entornos ya hay un Node embebido (por ejemplo el que trae un IDE). El skill lo
 > detecta, pero conviene no depender de una ruta ajena al proyecto.
@@ -296,6 +307,8 @@ config real:
   de companions.
 - El sandbox `systemd-run` se midió (tabla de arriba).
 - La auto-delegación se midió en 3 escenarios (sin política / pidiendo tool / con política imperativa).
+- Los validadores Python se verificaron contra el Node original: 65/65 conformidad y 273/273
+  diferencial byte-idéntico (ver [Validadores en Python](#validadores-en-python-sin-nodejs)).
 
 ## El límite que define el diseño
 
@@ -312,7 +325,7 @@ binding duro.
 
 ## Roadmap
 
-- [ ] Port a Python de los validadores (opción A de [Sin Node.js](#sin-nodejs-port-a-python))
+- [x] Port a Python de los validadores (equivalencia verificada 273/273)
 - [ ] `scripts/swarm-sandbox.sh`: runner de `systemd-run`/bwrap listo para usar
 - [ ] Personas extra: `docs`, `perf`, `test-writer`
 - [ ] `scripts/` para generar el pool automáticamente desde `[models]`

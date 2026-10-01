@@ -111,6 +111,11 @@ Every record has a stable fingerprint, title, description, and repository-relati
 Run:
 
 ```sh
+# Python (no Node.js required)
+python3 <skill-dir>/validate-findings.py <output-dir>/findings.json
+python3 <skill-dir>/validate-coverage-ledger.py <output-dir>/coverage-ledger.json
+
+# Node original, if you prefer it
 node <skill-dir>/validate-findings.cjs <output-dir>/findings.json
 node <skill-dir>/validate-coverage-ledger.cjs <output-dir>/coverage-ledger.json
 ```
