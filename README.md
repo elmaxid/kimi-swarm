@@ -241,7 +241,6 @@ SB=<plugin-root>/scripts/swarm-sandbox.py
 
 # 1. crear la corrida y copiar el target como fuente read-only
 python3 $SB create --out-dir /opt/audit-runs/proj --target /ruta/al/proyecto
-
 # 2. ejecutar un comando del target, confinado a su scratch
 python3 $SB run --out-dir /opt/audit-runs/proj --agent-id hunter-1 -c '
   cp -r "$SWARM_SOURCE" "$TMPDIR/work" && cd "$TMPDIR/work" && npm test > "$TMPDIR/out.txt" 2>&1'
@@ -260,6 +259,23 @@ Opciones útiles:
 | `--workdir scratch` | arrancar directo en el scratch, en vez del source read-only |
 | `--backend systemd\|bwrap` | forzar el backend en vez de autodetectar |
 | `--allow a/b.txt` | promover un archivo anidado del scratch; acepta subrutas relativas |
+| `--exclude NOMBRE` | omitir un directorio o archivo del source, a cualquier profundidad |
+| `--no-default-excludes` | no aplicar las exclusiones de secretos por defecto |
+
+### Exclusiones de secretos
+
+`create` **no copia al source** los directorios que suelen tener credenciales:
+`configs`, `data`, `caddy`, `.tools`, `.git`, `.env`, `host_key`, `secret.key`,
+`secrets.txt`. Al terminar, escanea el source y **avisa** si quedó algún archivo con
+pinta de secreto (`*.key`, `*.pem`, `*.crt`, nombres conocidos). Un proyecto que
+guarda sus secretos en otro sitio se cubre con `--exclude`.
+
+> **`.tools/` excluido tiene un costo.** Si el proyecto trae su toolchain vendorizado
+> ahí (como ttunel, que usa `.tools/go/bin/go`), el sandbox no lo verá: `go version`
+> puede intentar **descargar** el toolchain y, con la red bloqueada, fallar. Para
+> auditar el código estático no importa; para compilar dentro del sandbox, agregá
+> `--exclude configs --exclude data --exclude caddy --exclude .git`
+> (o `--no-default-excludes` más excludes acotados) y dejá `.tools` adentro.
 
 **Garantías que verifica el runner** (medidas end-to-end, no sólo afirmadas):
 

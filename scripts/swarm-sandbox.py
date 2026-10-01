@@ -49,6 +49,15 @@ DEFAULT_MEMORY = "512M"
 DEFAULT_TASKS = 64
 DEFAULT_RUNTIME_S = 300
 
+# Names never copied into the read-only source, so an audit run cannot leak the
+# operator's secrets into its own artifacts. Override with --no-default-excludes.
+DEFAULT_EXCLUDES = (
+    "configs", "data", "caddy", ".tools", ".git", ".env",
+    "host_key", "secrets.txt", "secret.key",
+)
+SECRET_SUFFIXES = (".key", ".pem", ".crt")
+SECRET_NAMES = ("host_key", "secret.key", "secrets.txt", ".env")
+
 # Fixed shell wrapper: the caller's command travels in an environment variable,
 # so nothing from the command text is interpolated into the outer shell string.
 WRAPPER = 'cd "$SWARM_WORKDIR" && eval "$SWARM_COMMAND"'
@@ -139,6 +148,16 @@ def backend_available(backend):
     return False
 
 
+def scan_source_for_secrets(source_dir):
+    """List secret-looking files that made it into the read-only source copy."""
+    found = []
+    for root, dirs, files in os.walk(source_dir):
+        for name in files:
+            if name in SECRET_NAMES or name.lower().endswith(SECRET_SUFFIXES):
+                found.append(os.path.relpath(os.path.join(root, name), source_dir))
+    return sorted(found)
+
+
 def make_traversable(path):
     """Let an ephemeral sandbox user read its way into the run directory."""
     current = path
@@ -177,9 +196,25 @@ def cmd_create(args):
             return fail("--target is not a directory: %s" % args.target)
         if os.path.exists(source_dir):
             shutil.rmtree(source_dir)
-        shutil.copytree(target, source_dir, symlinks=False, ignore_dangling_symlinks=True)
+
+        excludes = [name for name in (args.exclude or []) if name]
+        if not args.no_default_excludes:
+            excludes += [name for name in DEFAULT_EXCLUDES if name not in excludes]
+        exclude_set = set(excludes)
+
+        def ignore(directory, names):
+            skipped = [name for name in names if name in exclude_set]
+            return skipped
+
+        shutil.copytree(target, source_dir, symlinks=False,
+                        ignore_dangling_symlinks=True, ignore=ignore)
+        metadata_excludes = sorted(exclude_set)
 
     metadata = load_metadata(out_dir) if os.path.exists(metadata_path(out_dir)) else {}
+    if args.target:
+        metadata["excluded_names"] = metadata_excludes
+        leaked = scan_source_for_secrets(source_dir)
+        metadata["secret_files_in_source"] = leaked
     metadata.update({
         "run_id": os.path.basename(out_dir),
         "out_dir": out_dir,
@@ -206,6 +241,14 @@ def cmd_create(args):
     print("backend: %s" % backend)
     if metadata["source_dir"]:
         print("source copy: %s" % metadata["source_dir"])
+        print("excluded: %s" % ", ".join(metadata.get("excluded_names", [])))
+        leaked = metadata.get("secret_files_in_source", [])
+        if leaked:
+            shown = ", ".join(leaked[:10])
+            more = "" if len(leaked) <= 10 else ", ... and %d more" % (len(leaked) - 10)
+            print("WARNING: %d secret-looking file(s) copied into the source:" % len(leaked))
+            print("         %s%s" % (shown, more))
+            print("         re-run with more --exclude, or check the target's ignore rules")
     print("run with: %s run --out-dir %s --agent-id <id> -c '<command>'"
           % (os.path.basename(__file__), shlex.quote(out_dir)))
     return 0
@@ -369,6 +412,12 @@ def build_parser():
     create = sub.add_parser("create", help="set up a run directory and its sandbox")
     create.add_argument("--out-dir", required=True)
     create.add_argument("--target", help="repository to copy into the run as read-only source")
+    create.add_argument("--exclude", action="append", default=[],
+                        help="directory or file name to omit from the source copy, at any depth "
+                             "(repeatable); use for secret-bearing paths")
+    create.add_argument("--no-default-excludes", action="store_true",
+                        help="do not apply the built-in secret-directory excludes "
+                             "(configs, data, caddy, .tools, .git, .env, keys)")
     create.add_argument("--backend", default="auto", choices=["auto", "systemd", "bwrap"])
     create.set_defaults(func=cmd_create)
 
