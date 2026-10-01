@@ -22,7 +22,7 @@ guía para configurar el pool.
 En Kimi Code:
 
 ```
-/plugins install https://github.com/<owner>/kimi-swarm
+/plugins install https://github.com/elmaxid/kimi-swarm
 ```
 
 o desde un checkout local:
