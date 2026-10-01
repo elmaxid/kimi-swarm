@@ -231,58 +231,63 @@ fixtures). Los requisitos que pide:
 - **Target read-only**; el proceso solo escribe en su `scratch/`.
 - **Límites** de CPU, memoria, procesos, tamaño de archivo, disco y wall-clock.
 
-### Opción A — `systemd-run` (este server)
+### El runner incluido: `scripts/swarm-sandbox.py`
 
-Este host tiene systemd 259 y user namespaces habilitados, así que **no hace falta instalar nada**.
-Verificado en este server:
+Implementa los tres pasos del contrato del skill (ejecutar, aislar, promover) y elige el backend
+solo (`systemd` si hay systemd, si no `bwrap`). Solo stdlib de Python.
 
 ```bash
-mkdir -p /opt/sbx-scratch && chmod 1777 /opt/sbx-scratch   # scratch de la ejecución
+SB=<plugin-root>/scripts/swarm-sandbox.py
 
-systemd-run --quiet --wait --collect \
-  -p DynamicUser=yes \
-  -p PrivateNetwork=yes \
-  -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
-  -p NoNewPrivileges=yes \
-  -p ReadWritePaths=/opt/sbx-scratch \
-  -p MemoryMax=512M -p TasksMax=64 -p RuntimeMaxSec=300 \
-  /bin/sh -c 'cd /opt/sbx-scratch && <comando-del-target>'
+# 1. crear la corrida y copiar el target como fuente read-only
+python3 $SB create --out-dir /opt/audit-runs/proj --target /ruta/al/proyecto
+
+# 2. ejecutar un comando del target, confinado a su scratch
+python3 $SB run --out-dir /opt/audit-runs/proj --agent-id hunter-1 -c '
+  cp -r "$SWARM_SOURCE" "$TMPDIR/work" && cd "$TMPDIR/work" && npm test > "$TMPDIR/out.txt" 2>&1'
+
+# 3. promover solo el resultado mínimo, ya terminado el sandbox
+python3 $SB promote --out-dir /opt/audit-runs/proj --agent-id hunter-1 --allow out.txt
 ```
 
-Resultado medido en este host:
+Variables disponibles dentro del sandbox: `$SWARM_SOURCE` (copia read-only del target),
+`$SWARM_WORKDIR` (cwd por defecto = el source), `$TMPDIR`/`$HOME` (el scratch escribible).
 
-| Control | Resultado |
+Opciones útiles:
+
+| Opción | Para qué |
 | --- | --- |
-| Usuario | efímero (`run-pXXXX-iXXXXX`), no root |
-| `/root` (secretos, `config.toml`) | oculto, sin acceso |
-| Red externa | bloqueada |
-| `/etc`, `/usr` | read-only (`ProtectSystem=strict`) |
-| Escritura | solo en `ReadWritePaths` |
-| `HOME` | sanitizado |
+| `--workdir scratch` | arrancar directo en el scratch, en vez del source read-only |
+| `--backend systemd\|bwrap` | forzar el backend en vez de autodetectar |
+| `--allow a/b.txt` | promover un archivo anidado del scratch; acepta subrutas relativas |
 
-Para el flujo completo, el "runner" es un comando que el agente ejecuta vía `Bash`: copia el target a
-`scratch/`, ejecuta dentro de `systemd-run` con esos límites, y solo promueve el resultado mínimo.
+**Garantías que verifica el runner** (medidas end-to-end, no sólo afirmadas):
+
+- Usuario efímero (no root), `$HOME` y `$TMPDIR` apuntando al scratch.
+- Red externa bloqueada; `/etc`, `/usr` y el source **read-only** (un `echo > /etc/x` falla con
+  “Read-only file system”, y el source queda intacto).
+- Solo se escribe en el scratch.
+- `promote` rechaza symlinks, rutas absolutas, `..`, rutas con `\` o `:`, archivos > 16 MiB, y no
+  sobreescribe un artefacto existente.
+
+### Trampas al usar `systemd-run` (las encontramos probando)
+
+Si preferís invocar `systemd-run` a mano, evitá estos tres errores que cuestan tiempo:
+
+1. **Nada de `--out-dir` bajo `/tmp` o `/var/tmp`.** `DynamicUser` monta algo sobre `/tmp` y un
+   `ReadWritePaths` bajo esa ruta falla con `226/NAMESPACE`. Usá `/opt` o `/srv`. El runner lo
+   rechaza de entrada.
+2. **No uses `PrivateTmp=yes`** si el scratch está bajo `/tmp`: lo oculta y la escritura falla.
+   El runner no lo usa y en su lugar apunta `$TMPDIR` al scratch.
+3. **No uses `-p WorkingDirectory=`.** Con usuario efímero falla con `200/CHDIR`. En su lugar el
+   comando hace `cd` a `$SWARM_WORKDIR` dentro del sandbox.
+
+Y siempre `chmod 1777` al scratch: `DynamicUser` es efímero, nunca es dueño del directorio.
 
 ### Opción B — `bubblewrap` (cualquier Linux)
 
-`bwrap` es una herramienta mínima de sandbox por namespaces, sin daemon. Se instala con
-`apt-get install bubblewrap` (~1 MB):
-
-```bash
-bwrap --unshare-all --share-net=false \
-  --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
-  --bind /scratch /scratch --tmpfs /tmp \
-  --proc /proc --dev /dev --die-with-parent \
-  --chdir /scratch /bin/sh -c '<comando-del-target>'
-```
-
-Útil si el server no corre systemd o querés algo sin acoplarse a él.
-
-### Opción C — contenedor
-
-`docker`/`podman` con `--network=none --read-only --tmpfs /tmp --memory --pids-limit
---cap-drop=ALL --user 65534`. Es lo más portable y lo más pesado; conviene si ya usás contenedores en
-el puesto.
+`bwrap` es un sandbox por namespaces, sin daemon. Se instala con `apt-get install bubblewrap`
+(~1 MB). El runner lo usa si no hay systemd, o con `--backend bwrap`.
 
 ## Automatización y no-interactividad
 
@@ -326,7 +331,7 @@ binding duro.
 ## Roadmap
 
 - [x] Port a Python de los validadores (equivalencia verificada 273/273)
-- [ ] `scripts/swarm-sandbox.sh`: runner de `systemd-run`/bwrap listo para usar
+- [x] `scripts/swarm-sandbox.py`: runner de `systemd-run`/bwrap con create/run/promote
 - [ ] Personas extra: `docs`, `perf`, `test-writer`
 - [ ] `scripts/` para generar el pool automáticamente desde `[models]`
 - [ ] Publicar en el marketplace *Curated* de Kimi

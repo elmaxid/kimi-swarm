@@ -11,9 +11,12 @@ Before delegating:
 
 1. Confirm the mode. Full audit mode is for an explicit "audit this codebase" or pen-test request;
    a focused security question stays in guidance mode and creates no artifacts.
-2. Confirm whether an **OS-enforced sandbox** is available. Unless it is, run **static-only**: read
-   source and record every execution-dependent candidate as `needs_validation`. Never execute
-   target-controlled code without the sandbox controls the skill requires.
+2. Confirm whether an **OS-enforced sandbox** is available. This plugin ships
+   `scripts/swarm-sandbox.py` (systemd or bubblewrap backend) for exactly this. If no sandbox is
+   available, run **static-only**: read source and record every execution-dependent candidate as
+   `needs_validation`. Never execute target-controlled code without the sandbox controls the skill
+   requires. When you do use it: `create` with a run directory on a real filesystem (never `/tmp`),
+   `run` per agent, then `promote` only the minimal finished result into `artifacts/`.
 3. Check that `python3` is available for `validate-findings.py` and `validate-coverage-ledger.py`
    (Phases 4–5); the Node originals `validate-*.cjs` work too if Node is present. If neither runtime
    is available, report it as a run blocker instead of claiming a passing validation.

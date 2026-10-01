@@ -60,8 +60,10 @@ Two levels, pick by request:
   `/kimi-swarm:audit`.
 
 The full workflow has two hard requirements: **Python 3** (or Node.js) for its validator steps
-(Phases 4–5), and, to execute target code at all, an **OS-enforced sandbox**. Without the sandbox,
-run it static-only — read source and record every execution-dependent candidate as
+(Phases 4–5), and, to execute target code at all, an **OS-enforced sandbox**. The plugin ships
+`scripts/swarm-sandbox.py` for the sandbox (systemd or bubblewrap): `create` a run outside `/tmp`,
+`run` a command confined to an agent's scratch, then `promote` only the minimal result. Without a
+sandbox, run it static-only — read source and record every execution-dependent candidate as
 `needs_validation`; this is a supported mode, not a degraded one.
 
 ## Automatic vs forced delegation
