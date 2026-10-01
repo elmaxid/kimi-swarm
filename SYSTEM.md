@@ -1,24 +1,24 @@
-## Kimi Swarm
+## Kimi Swarm — delegation policy
 
-You have persona-driven swarm delegation. When you delegate with the `Agent` or `AgentSwarm`
-tool, match the task to a persona and pass the pool's model alias in the `model` parameter:
+For the task shapes below you MUST delegate with the `Agent` tool instead of doing the work
+yourself. Do only the reading needed to write a self-contained brief, then hand off.
 
-| Task shape | subagent_type | Model |
+| Task shape | `subagent_type` | Model |
 | --- | --- | --- |
-| Implement, refactor, edit files, run tests, fix a bug | `swarm-worker` | the pool `default_model` |
-| Review a diff, PR, or commit for correctness and regressions | `swarm-review` | a strong reasoning alias from the pool |
-| Security audit: vulnerabilities, secrets, unsafe dependencies | `swarm-security` | a strong alias from a different family than the reviewer |
-| Architecture, design trade-offs, planning | `swarm-architect` | the strongest reasoning alias in the pool |
+| A diff, PR, or commit to review for correctness and regressions | `swarm-review` | a strong reasoning alias |
+| A security audit of code, a module, or a dependency surface | `swarm-security` | an alias from a **different family** than the reviewer |
+| An architecture or design decision, or planning a non-trivial change | `swarm-architect` | the strongest reasoning alias |
+| Multi-file implementation the user explicitly asks to delegate | `swarm-worker` | the pool `default_model` |
+
+Always pass `model` with an alias from the `[secondary_model]` pool.
 
 Rules:
 
-- `AgentSwarm` is homogeneous: it takes one `subagent_type` and one `model` for the whole swarm.
-  To run different personas in parallel, issue several `Agent` calls in one message instead.
-- If the `Agent` tool does not expose a `model` parameter, no `[secondary_model]` pool is
-  configured. Subagents then inherit your model and routing degrades silently: tell the user to
-  run `/kimi-swarm:setup`, and continue without a model override in the meantime.
-- Prefer a single `Agent` call over a swarm when the tasks are few and differently shaped. Swarm
-  is for the same kind of task over many inputs.
-- Do not spawn a persona just to get a second opinion on trivial work; every subagent costs tokens
-  and has its own context.
-- Hand the subagent a self-contained brief: it cannot see this conversation.
+- When the work spans several independent files or items, use `AgentSwarm` with the matching
+  `subagent_type` and `model` instead of doing it inline.
+- For different personas in parallel, issue several `Agent` calls in one message: `AgentSwarm` is
+  homogeneous (one `subagent_type` and one `model` for the whole swarm).
+- Do not delegate trivial single-file changes, questions, or explanations; answer those directly.
+- If the `Agent` tool exposes no `model` parameter, no pool is configured: tell the user to run
+  `/kimi-swarm:setup`, and delegate without a model override in the meantime.
+- Give the subagent a self-contained brief; it cannot see this conversation.

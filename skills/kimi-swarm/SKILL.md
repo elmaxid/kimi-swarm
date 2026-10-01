@@ -45,6 +45,22 @@ Pass `subagent_type` and `model` together on each `Agent` call:
 
 Pick the reviewer and auditor from different model families so their blind spots do not overlap.
 
+## Automatic vs forced delegation
+
+Auto-delegation depends on the orchestrator's own judgment, so strength matters:
+
+- With only the routing table, the main agent **knows** the personas but often does the work inline
+  anyway — especially when it can read the few files fast. Naming the tool in the prompt
+  ("use AgentSwarm for this") is unreliable on its own.
+- An **imperative policy** in the system prompt flips this: with wording like "you MUST delegate
+  task shape X to persona Y, do not do it inline", the agent delegates on its own and cites the
+  policy in its reasoning. This is what `SYSTEM.md` in this plugin provides.
+- To force it at the user level, put the same policy in `$KIMI_CODE_HOME/SYSTEM.md` (which fully
+  replaces the default main-agent prompt) or in `~/.kimi-code/AGENTS.md` (which is appended as
+  instructions).
+- For a deterministic single flow, the slash commands (`/kimi-swarm:review`,
+  `/kimi-swarm:security-audit`) dispatch explicitly and are not subject to the model's judgment.
+
 ## Setting up the pool
 
 The pool lives in `config.toml` and cannot be set by the plugin. Run `/kimi-swarm:setup`, or add
