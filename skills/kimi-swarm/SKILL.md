@@ -13,8 +13,8 @@ Kimi has native delegation, but the pieces are separate:
 
 - **Delegation**: the `Agent` tool (one task, one subagent) and the `AgentSwarm` tool (many
   subagents from one `{{item}}` template). Both run in isolated contexts and return only a result.
-- **Personas**: Markdown agent files with frontmatter. This plugin ships four: `swarm-worker`,
-  `swarm-review`, `swarm-security`, `swarm-architect`.
+- **Personas**: Markdown agent files with frontmatter. This plugin ships six: `swarm-worker`,
+  `swarm-review`, `swarm-security`, `swarm-architect`, `audit-hunter`, `audit-verifier`.
 - **Different model**: the `[secondary_model]` section of `config.toml`. It defines a pool of
   candidate model aliases; when the pool exists, the `Agent` and `AgentSwarm` tools gain a `model`
   parameter listing the pool with each alias's hint.
@@ -42,8 +42,27 @@ Pass `subagent_type` and `model` together on each `Agent` call:
 | Review a diff, PR, or commit | `swarm-review` | a strong reasoning alias |
 | Security audit | `swarm-security` | a strong alias from a **different family** than the reviewer |
 | Architecture, design, planning | `swarm-architect` | the strongest reasoning alias |
+| Full security audit workflow (hunting waves) | `audit-hunter` | the fast pool `default_model` |
+| Full security audit workflow (validate / refute candidates) | `audit-verifier` | a strong alias from a **different family** than the hunter |
 
 Pick the reviewer and auditor from different model families so their blind spots do not overlap.
+
+## Security audits
+
+Two levels, pick by request:
+
+- **Lightweight**: one `swarm-security` subagent reviews a diff or a module. Fast, no artifacts.
+- **Full workflow**: the vendored Cloudflare `security-audit` skill
+  (`skills/security-audit/`) runs six phases — reconnaissance, coverage-led hunting waves,
+  candidate validation, structured output, independent verification, report. Use it for an explicit
+  "audit this codebase" or pen-test request. It uses `audit-hunter` for hunting (fast model) and
+  `audit-verifier` for validation and record verification (strong, different family). Start it with
+  `/kimi-swarm:audit`.
+
+The full workflow has two hard requirements: **Node.js** for its `validate-*.cjs` validators
+(Phases 4–5), and, to execute target code at all, an **OS-enforced sandbox**. Without the sandbox,
+run it static-only — read source and record every execution-dependent candidate as
+`needs_validation`; this is a supported mode, not a degraded one.
 
 ## Automatic vs forced delegation
 

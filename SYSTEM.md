@@ -8,6 +8,7 @@ yourself. Do only the reading needed to write a self-contained brief, then hand 
 | A diff, PR, or commit to review for correctness and regressions | `swarm-review` | a strong reasoning alias |
 | A security audit of code, a module, or a dependency surface | `swarm-security` | an alias from a **different family** than the reviewer |
 | An architecture or design decision, or planning a non-trivial change | `swarm-architect` | the strongest reasoning alias |
+| Full security audit / pen-test of a codebase | the Cloudflare `security-audit` skill: `audit-hunter` then `audit-verifier` | hunter: fast alias; verifier: strong alias from a **different family** |
 | Multi-file implementation the user explicitly asks to delegate | `swarm-worker` | the pool `default_model` |
 
 Always pass `model` with an alias from the `[secondary_model]` pool.

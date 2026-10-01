@@ -90,16 +90,43 @@ binding duro.
 | --- | --- | --- |
 | `swarm-worker` | lectura + escritura + Bash | Implementar, refactorizar, correr build/tests, dejar el cambio hecho |
 | `swarm-review` | solo lectura | Revisar diff/PR: severidad, regresiones, edge cases |
-| `swarm-security` | solo lectura | Auditoría: inyección, auth, secretos, dependencias |
+| `swarm-security` | solo lectura | Auditoría ligera: inyección, auth, secretos, dependencias |
 | `swarm-architect` | lectura + web | Diseño, trade-offs, planificación |
+| `audit-hunter` | solo lectura | Fase de cacería del workflow de auditoría completo |
+| `audit-verifier` | solo lectura | Fase de validación/refutación, en familia de modelo distinta |
 
-`swarm-review` y `swarm-security` son read-only y no pueden lanzar más subagentes.
+Las cinco primeras son read-only y no pueden lanzar más subagentes (`swarm-worker` es la única con
+escritura).
+
+## Auditoría de seguridad completa
+
+Incluye vendorizado el skill [cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill)
+(MIT) como `skills/security-audit/`, adaptado a Kimi. Corre el workflow de seis fases —
+reconocimiento, cacería guiada por cobertura, validación de candidatos, salida estructurada,
+verificación independiente y reporte.
+
+```
+/kimi-swarm:audit /ruta/al/repo
+```
+
+Usa `audit-hunter` (modelo rápido) para cazar y `audit-verifier` (modelo fuerte, **otra familia**)
+para validar y refutar: es exactamente donde el multi-modelo aporta más.
+
+Dos requisitos duros:
+
+- **Node.js** para los validadores `validate-*.cjs` (fases 4-5).
+- **Sandbox OS-enforced** para ejecutar código del target. Sin él, corre en modo **static-only**
+  (solo lectura de fuente; lo que dependa de ejecución queda como `needs_validation`). Es un modo
+  soportado por el propio skill, no una degradación.
+
+Los cambios respecto al original y cómo actualizarlo están en `THIRD-PARTY.md`.
 
 ## Roadmap (MVP)
 
 - [ ] Validación del `$ARGUMENTS` de los comandos y mejor diff automático
 - [ ] Personas extra: `docs`, `perf`, `test-writer`
 - [ ] `scripts/` para generar el pool automáticamente desde `[models]`
+- [ ] Runner de sandbox (contenedor/bubblewrap) para habilitar evidencia local acotada
 - [ ] Publicar en el marketplace *Curated* de Kimi
 - [ ] README en inglés
 

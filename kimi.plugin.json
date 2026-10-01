@@ -1,7 +1,7 @@
 {
   "name": "kimi-swarm",
   "version": "0.1.0",
-  "description": "Persona-driven swarm for Kimi Code: delegate to worker, review, security, and architect subagents, each on a different model from the orchestrator.",
+  "description": "Persona-driven swarm for Kimi Code: delegate to worker, review, security, and architect subagents, each on a different model from the orchestrator. Includes the vendored Cloudflare security-audit workflow for full codebase audits.",
   "keywords": [
     "swarm",
     "subagents",
