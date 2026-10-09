@@ -75,6 +75,47 @@ EOF
 
 Útil para CI y para replicar el plugin en varios equipos con un script.
 
+### Los scripts incluidos: `install-local.py` y `uninstall-local.py`
+
+La misma instalación headless, sin `cp`/`cat` a mano, y con vuelta atrás. Solo stdlib de Python 3.
+
+```bash
+SC=<plugin-root>/scripts
+python3 $SC/install-local.py                 # copia el árbol al managed y registra en installed.json
+python3 $SC/install-local.py --name otro-id  # id distinto (por defecto, el del manifest)
+```
+
+`--source` por defecto es el directorio del script, así que corré siempre el del working tree. Si
+editás las fuentes, volvé a correrlo y hacé `/reload`: la CLI lee `plugins/managed/`, no tu árbol.
+
+Para deshacer, `uninstall-local.py`:
+
+| Opción | Qué hace |
+| --- | --- |
+| (sin flags) | saca la entrada de `plugins/installed.json` y deja la copia gestionada en su lugar |
+| `--purge` | además borra `plugins/managed/<id>/` |
+| `--remove-pool` | además quita `[secondary_model]` de `config.toml`, con un backup con timestamp antes |
+| `--restore-backup FILE` | en vez de `--remove-pool`: reemplaza `config.toml` por el backup que nombres |
+| `--dry-run` | imprime el plan y no cambia nada |
+
+`--remove-pool` y `--restore-backup` son mutuamente excluyentes.
+
+Lo que garantizan (varias rondas de revisión, con cada caso reproducido antes y después):
+
+- El id del plugin se valida (`^[A-Za-z0-9][A-Za-z0-9._-]*$`): ni una ruta absoluta ni `../..`
+  llegan a un `rmtree`. Se rechaza `plugins/managed` como symlink, y el instalador se niega si el
+  origen y el destino se solapan (correrlo *desde* la copia gestionada borraría el árbol que iba a
+  copiar).
+- `installed.json` se valida **antes** de tocar el disco: un registro roto da un error limpio en vez
+  de dejar una copia huérfana junto a una entrada vieja.
+- `--remove-pool` es TOML-aware: saca la tabla, sus `[secondary_model.*]` y el bloque de comentarios
+  pegado arriba (más una línea en blanco cuando no hay comentario), deja los comentarios de la tabla
+  siguiente con su tabla, respeta CRLF y un BOM inicial, y **compara estructuralmente contra el
+  original antes de escribir**: si algo más cambiaría, no escribe nada. Si el pool existe pero con
+  claves punteadas o tabla inline, falla con un error explícito.
+- `--restore-backup` no baja los permisos de `config.toml`: conserva el modo previo, o `0600` si no
+  había archivo.
+
 ## Setup del pool de modelos
 
 Las personas se instalan solas, pero **el modelo no se puede fijar en la persona**: el campo `model`
