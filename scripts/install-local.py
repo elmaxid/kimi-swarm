@@ -16,11 +16,13 @@ $KIMI_CODE_HOME or ~/.kimi-code.
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
 
 SKIP = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "*.pyo")
+ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def resolve_home(explicit):
@@ -29,7 +31,23 @@ def resolve_home(explicit):
     env = os.environ.get("KIMI_CODE_HOME")
     if env:
         return os.path.realpath(env)
-    return os.path.join(os.path.expanduser("~"), ".kimi-code")
+    return os.path.realpath(os.path.join(os.path.expanduser("~"), ".kimi-code"))
+
+
+def validate_id(plugin_id):
+    if not isinstance(plugin_id, str) or plugin_id in (".", "..") or not ID_PATTERN.match(plugin_id):
+        raise ValueError("invalid plugin id %r: must match ^[A-Za-z0-9][A-Za-z0-9._-]*$" % (plugin_id,))
+    return plugin_id
+
+
+def paths_overlap(first, second):
+    """True when two resolved paths are equal or one contains the other."""
+    if first == second:
+        return True
+    try:
+        return os.path.commonpath([first, second]) in (first, second)
+    except ValueError:
+        return False
 
 
 def load_manifest(source):
@@ -69,22 +87,49 @@ def main(argv=None):
         sys.stderr.write("error: %s\n" % error)
         return 1
 
-    plugin_id = args.name or manifest["name"]
+    try:
+        plugin_id = validate_id(args.name or manifest["name"])
+    except ValueError as error:
+        sys.stderr.write("error: %s\n" % error)
+        return 1
+
     home = resolve_home(args.home)
     plugins_dir = os.path.join(home, "plugins")
     managed = os.path.join(plugins_dir, "managed", plugin_id)
     registry_path = os.path.join(plugins_dir, "installed.json")
 
-    os.makedirs(os.path.dirname(managed), exist_ok=True)
-    if os.path.exists(managed):
-        shutil.rmtree(managed)
-    shutil.copytree(source, managed, ignore=SKIP)
+    managed_parent = os.path.join(plugins_dir, "managed")
+    if os.path.islink(managed_parent):
+        sys.stderr.write("error: refusing to install through a symlinked plugins/managed: %s -> %s\n"
+                         % (managed_parent, os.path.realpath(managed_parent)))
+        return 1
 
     try:
         registry = load_registry(registry_path)
     except ValueError as error:
         sys.stderr.write("error: %s\n" % error)
         return 1
+
+    os.makedirs(managed_parent, exist_ok=True)
+    resolved_parent = os.path.realpath(managed_parent)
+    if os.path.islink(managed):
+        destination = os.path.join(resolved_parent, plugin_id)
+    else:
+        destination = os.path.realpath(managed)
+    if os.path.dirname(destination) != resolved_parent:
+        sys.stderr.write("error: refusing to write outside the managed plugins dir: %s\n" % managed)
+        return 1
+    if paths_overlap(source, destination):
+        sys.stderr.write("error: source %s overlaps the managed copy %s; "
+                         "run the installer from the plugin source tree, not from the managed copy\n"
+                         % (source, destination))
+        return 1
+
+    if os.path.islink(managed) or (os.path.exists(managed) and not os.path.isdir(managed)):
+        os.unlink(managed)
+    if os.path.isdir(managed):
+        shutil.rmtree(managed)
+    shutil.copytree(source, managed, ignore=SKIP, symlinks=True)
 
     record = {
         "id": plugin_id,
