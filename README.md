@@ -252,10 +252,20 @@ Detalle de mantenimiento en `THIRD-PARTY.md`.
 **Alternativa sin mantener un port** — Node como binario único autocontenido, fuera del sistema:
 
 ```bash
-curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz \
-  | tar -xJ --strip-components=1 -C /opt/node-portable
+V=v22.14.0; T=node-$V-linux-x64.tar.xz
+cd "$(mktemp -d)"
+curl -fsSLO "https://nodejs.org/dist/$V/$T"
+curl -fsSLO "https://nodejs.org/dist/$V/SHASUMS256.txt"
+grep " $T\$" SHASUMS256.txt | sha256sum -c -   # aborta si no coincide
+mkdir -p /opt/node-portable
+tar -xJf "$T" --strip-components=1 -C /opt/node-portable
 /opt/node-portable/bin/node --version
 ```
+
+Primero bajás el archivo, **después** lo verificás contra el `SHASUMS256.txt` publicado, y solo
+entonces extraés; `mkdir -p` crea el destino porque `tar -C` falla si no existe. Para cadena de
+confianza completa, Node firma `SHASUMS256.txt.sig` con GPG (`SHASUMS256.txt.asc` para la variante
+con firma inline): verificá la firma con las claves del release team antes de usar los hashes.
 
 No toca `$PATH` ni el sistema; es un directorio que podés borrar.
 
@@ -308,15 +318,34 @@ Opciones útiles:
 `create` **no copia al source** los directorios que suelen tener credenciales:
 `configs`, `data`, `caddy`, `.tools`, `.git`, `.env`, `host_key`, `secret.key`,
 `secrets.txt`. Al terminar, escanea el source y **avisa** si quedó algún archivo con
-pinta de secreto (`*.key`, `*.pem`, `*.crt`, nombres conocidos). Un proyecto que
-guarda sus secretos en otro sitio se cubre con `--exclude`.
+pinta de secreto (`*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `id_*`, `.env` y
+`.env.*`, cualquier cosa bajo un `.git/` como `.git/config`, más los nombres
+conocidos). Un proyecto que guarda sus secretos en otro sitio se cubre con
+`--exclude`.
 
 > **`.tools/` excluido tiene un costo.** Si el proyecto trae su toolchain vendorizado
 > ahí (como ttunel, que usa `.tools/go/bin/go`), el sandbox no lo verá: `go version`
 > puede intentar **descargar** el toolchain y, con la red bloqueada, fallar. Para
-> auditar el código estático no importa; para compilar dentro del sandbox, agregá
-> `--exclude configs --exclude data --exclude caddy --exclude .git`
-> (o `--no-default-excludes` más excludes acotados) y dejá `.tools` adentro.
+> auditar el código estático no importa; para compilar dentro del sandbox, **abrí
+> un agujero acotado**: apagá los defaults y volvé a listar a mano, con
+> `--exclude`, exactamente los nombres que sí querés afuera — todos menos
+> `.tools`:
+>
+> ```bash
+> python3 $SB create --out-dir /opt/audit-runs/proj --target /ruta/al/proyecto \
+>   --no-default-excludes \
+>   --exclude configs --exclude data --exclude caddy \
+>   --exclude .git --exclude .env \
+>   --exclude host_key --exclude secret.key --exclude secrets.txt
+> ```
+>
+> **`--no-default-excludes` a secas es peligroso.** No reactiva solo `.tools`:
+> también deja de excluir `.git` y `.env`, es decir el historial completo del
+> repo y su archivo de credenciales. Si los querés afuera, tenés que volver a
+> pedirlos con `--exclude`, como arriba. El escáner de secretos los reporta
+> (`.git/config`, `.env*`), pero **avisar no es excluir**: el escáner no
+> reemplaza las exclusiones, cuando avisa los archivos ya están copiados en el
+> source.
 
 **Garantías que verifica el runner** (medidas end-to-end, no sólo afirmadas):
 
@@ -326,10 +355,19 @@ guarda sus secretos en otro sitio se cubre con `--exclude`.
 - Solo se escribe en el scratch.
 - `promote` rechaza symlinks, rutas absolutas, `..`, rutas con `\` o `:`, archivos > 16 MiB, y no
   sobreescribe un artefacto existente.
+- Los límites de memoria, procesos y wall-clock **se aplican distinto según el backend**, y el
+  `run-metadata.json` lo dice en `sandbox_controls.limits_enforced_by`: con `systemd` los aplica el
+  cgroup (`MemoryMax`, `TasksMax`, `RuntimeMaxSec`); con `bwrap` son rlimits del proceso
+  (`RLIMIT_AS`, `RLIMIT_NPROC`, `RLIMIT_FSIZE`, `RLIMIT_CPU`) más un timeout wall-clock del hijo,
+  sin contabilidad de cgroup.
+- El runner **no cambia permisos del host**. Con backend `systemd` verifica que los ancestros del
+  run dir sean traversables por `other`, y que la copia del source sea legible y atravesable (no lo
+  es si el target venía `0700`); si no, **falla** indicando el `chmod` exacto que tendrías que hacer
+  vos; nunca lo hace por su cuenta.
 
 ### Trampas al usar `systemd-run` (las encontramos probando)
 
-Si preferís invocar `systemd-run` a mano, evitá estos tres errores que cuestan tiempo:
+Si preferís invocar `systemd-run` a mano, evitá estos cuatro errores que cuestan tiempo:
 
 1. **Nada de `--out-dir` bajo `/tmp` o `/var/tmp`.** `DynamicUser` monta algo sobre `/tmp` y un
    `ReadWritePaths` bajo esa ruta falla con `226/NAMESPACE`. Usá `/opt` o `/srv`. El runner lo
@@ -338,8 +376,19 @@ Si preferís invocar `systemd-run` a mano, evitá estos tres errores que cuestan
    El runner no lo usa y en su lugar apunta `$TMPDIR` al scratch.
 3. **No uses `-p WorkingDirectory=`.** Con usuario efímero falla con `200/CHDIR`. En su lugar el
    comando hace `cd` a `$SWARM_WORKDIR` dentro del sandbox.
+4. **El target tiene que ser atravesable.** `create` copia el target **con sus permisos**, y el
+   usuario efímero no puede entrar a una copia que salió `0700`: el `run` falla con un
+   `cd: can't cd to .../source` que no explica nada. El runner lo detecta y te da el
+   `chmod -R o+rX` exacto sobre la copia; la alternativa es un target con directorios ya
+   atravesables, o el backend `bwrap`, que corre como vos.
 
 Y siempre `chmod 1777` al scratch: `DynamicUser` es efímero, nunca es dueño del directorio.
+
+> **Ese `1777` es world-writable.** Con `DynamicUser` no hay alternativa, pero en un host compartido
+> cualquier usuario local puede plantar archivos en el directorio desde donde corre el comando. El
+> runner lo avisa en cada `run` y registra el modo aplicado en
+> `sandbox_controls.scratch_mode` (`"1777"` con systemd, `"700"` con `bwrap`, que corre como vos).
+> Mitigación: poné el run dir dentro de una ruta que solo alcancen usuarios de confianza.
 
 ### Opción B — `bubblewrap` (cualquier Linux)
 

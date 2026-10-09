@@ -7,8 +7,13 @@ without exposing the host, its network, or its credentials.
 
 Backends:
   systemd  systemd-run with DynamicUser + PrivateNetwork + ProtectSystem=strict
-           (default on a systemd host; verified on Ubuntu with systemd 259)
-  bwrap    bubblewrap namespace sandbox (any Linux, needs `apt install bubblewrap`)
+           (default on a systemd host; verified on Ubuntu with systemd 259).
+           Memory, task and wall-clock limits are enforced by the cgroup
+           (MemoryMax, TasksMax, RuntimeMaxSec).
+  bwrap    bubblewrap namespace sandbox (any Linux, needs `apt install bubblewrap`).
+           Runs as the calling user; limits are per-process rlimits (RLIMIT_AS,
+           RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_CPU) plus a wall-clock timeout on
+           the child, not cgroup accounting.
 
 Usage:
   swarm-sandbox.py create --out-dir DIR [--target PATH] [--backend systemd|bwrap]
@@ -29,9 +34,11 @@ those paths, and `ReadWritePaths` on a shadowed path fails with
 """
 
 import argparse
+import fnmatch
 import json
 import os
 import re
+import resource
 import shlex
 import shutil
 import subprocess
@@ -48,6 +55,14 @@ MAX_PROMOTED_BYTES = 16 * 1024 * 1024
 DEFAULT_MEMORY = "512M"
 DEFAULT_TASKS = 64
 DEFAULT_RUNTIME_S = 300
+DEFAULT_FSIZE_BYTES = 256 * 1024 * 1024
+
+# What actually applies the numeric limits, per backend: systemd gets cgroup
+# accounting, bwrap only per-process rlimits plus a wall-clock timeout.
+LIMITS_ENFORCED_BY = {
+    "systemd": "cgroup (systemd)",
+    "bwrap": "rlimits + wall-clock timeout (per process, not cgroup accounting)",
+}
 
 # Names never copied into the read-only source, so an audit run cannot leak the
 # operator's secrets into its own artifacts. Override with --no-default-excludes.
@@ -55,8 +70,12 @@ DEFAULT_EXCLUDES = (
     "configs", "data", "caddy", ".tools", ".git", ".env",
     "host_key", "secrets.txt", "secret.key",
 )
-SECRET_SUFFIXES = (".key", ".pem", ".crt")
+SECRET_SUFFIXES = (".key", ".pem", ".crt", ".p12", ".pfx")
 SECRET_NAMES = ("host_key", "secret.key", "secrets.txt", ".env")
+# Names the default excludes keep out, so `--no-default-excludes` (or a narrower
+# --exclude set) does not silently drop them from the warning.
+SECRET_GLOBS = (".env.*", "id_*")
+SECRET_DIRS = (".git",)
 
 # Fixed shell wrapper: the caller's command travels in an environment variable,
 # so nothing from the command text is interpolated into the outer shell string.
@@ -148,31 +167,86 @@ def backend_available(backend):
     return False
 
 
+def looks_like_secret(relative_path, name):
+    """True when a copied file matches one of the secret-looking patterns."""
+    lowered = name.lower()
+    if name in SECRET_NAMES or lowered.endswith(SECRET_SUFFIXES):
+        return True
+    if any(fnmatch.fnmatch(name, pattern) for pattern in SECRET_GLOBS):
+        return True
+    segments = relative_path.split(os.sep)[:-1]
+    return any(segment in SECRET_DIRS for segment in segments)
+
+
 def scan_source_for_secrets(source_dir):
-    """List secret-looking files that made it into the read-only source copy."""
+    """List secret-looking files that made it into the read-only source copy.
+
+    Covers the names the default excludes would have removed (`.git/*`, `.env*`)
+    so a run with `--no-default-excludes` still gets warned about them.
+    """
     found = []
     for root, dirs, files in os.walk(source_dir):
         for name in files:
-            if name in SECRET_NAMES or name.lower().endswith(SECRET_SUFFIXES):
-                found.append(os.path.relpath(os.path.join(root, name), source_dir))
+            relative = os.path.relpath(os.path.join(root, name), source_dir)
+            if looks_like_secret(relative, name):
+                found.append(relative)
     return sorted(found)
 
 
-def make_traversable(path):
-    """Let an ephemeral sandbox user read its way into the run directory."""
-    current = path
+def paths_without_other_access(path, need_read=False):
+    """Existing paths, from `path` up to the root, that "other" cannot use.
+
+    Walking *through* a directory needs only its execute bit; the directory the
+    sandbox enters and lists (the read-only source copy) needs read as well.
+    """
+    root = os.path.realpath(path)
+    offenders = []
+    current = root
     while True:
         try:
             mode = os.stat(current).st_mode & 0o777
-            os.chmod(current, mode | 0o755)
         except OSError:
-            pass
+            mode = None
+        if mode is not None:
+            needed = 0o005 if (need_read and current == root) else 0o001
+            if mode & needed != needed:
+                offenders.append((current, mode, needed))
         parent = os.path.dirname(current)
-        if parent == current or current == "/":
+        if parent == current:
             break
         current = parent
-        if current in ("/", "/opt", "/srv", "/home", "/var"):
-            break
+    offenders.reverse()
+    return offenders
+
+
+def check_traversable(path, need_read=False, label="run directory"):
+    """Refuse to run when an ephemeral sandbox user cannot reach `path`.
+
+    The systemd backend runs as a DynamicUser, an ephemeral uid that owns
+    nothing, so every ancestor of the run directory has to be traversable by
+    "other" -- and a directory the sandbox must enter and list (the read-only
+    source copy, whose modes `create` takes from the target) has to be readable
+    as well. This only reports: it never changes a mode on the host.
+    """
+    offenders = paths_without_other_access(path, need_read)
+    if not offenders:
+        return None
+    lines = [
+        "the systemd backend runs as an ephemeral DynamicUser that cannot reach the "
+        "%s %s" % (label, path),
+        "  these paths are missing what 'other' needs:",
+    ]
+    for offending, mode, needed in offenders:
+        lines.append("    %s (mode %04o, needs %s)"
+                     % (offending, mode, "o+rx" if needed == 0o005 else "o+x"))
+    lines.append("  either move the run directory to a world-traversable location "
+                 "(for example /opt or /srv),")
+    lines.append("  or deliberately open the path(s) yourself:")
+    for offending, _mode, needed in offenders:
+        lines.append("    chmod %s %s"
+                     % ("o+rx" if needed == 0o005 else "o+x", shlex.quote(offending)))
+    lines.append("  this tool never changes host permissions for you")
+    return "\n".join(lines)
 
 
 def cmd_create(args):
@@ -188,6 +262,11 @@ def cmd_create(args):
         return fail("requested backend %r is not available on this host" % backend)
 
     os.makedirs(out_dir, exist_ok=True)
+
+    if backend == "systemd":
+        problem = check_traversable(out_dir)
+        if problem:
+            return fail(problem)
 
     source_dir = os.path.join(out_dir, "source")
     if args.target:
@@ -208,6 +287,12 @@ def cmd_create(args):
 
         shutil.copytree(target, source_dir, symlinks=False,
                         ignore_dangling_symlinks=True, ignore=ignore)
+        if backend == "systemd":
+            # copytree keeps the target's modes, and the ephemeral sandbox user
+            # has to be able to enter and list the copy.
+            problem = check_traversable(source_dir, need_read=True, label="source copy")
+            if problem:
+                return fail(problem)
         metadata_excludes = sorted(exclude_set)
 
     metadata = load_metadata(out_dir) if os.path.exists(metadata_path(out_dir)) else {}
@@ -233,6 +318,7 @@ def cmd_create(args):
                 "tasks": DEFAULT_TASKS,
                 "runtime_seconds": DEFAULT_RUNTIME_S,
             },
+            "limits_enforced_by": LIMITS_ENFORCED_BY[backend],
         },
     })
     save_metadata(out_dir, metadata)
@@ -279,8 +365,41 @@ def build_systemd_command(workdir, command, scratch, memory, tasks, runtime_s, s
     return argv
 
 
-def build_bwrap_command(workdir, command, scratch):
-    source = None
+def parse_memory_bytes(value):
+    """Turn a systemd-style size (`512M`, `2G`, `1048576`) into bytes."""
+    text = str(value).strip()
+    match = re.match(r"^(\d+)\s*([KMGT]?)B?$", text, re.IGNORECASE)
+    if not match:
+        raise ValueError("cannot parse memory limit: %r" % value)
+    scale = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
+    return int(match.group(1)) * scale[match.group(2).upper()]
+
+
+def make_rlimit_preexec(memory, tasks, runtime_s):
+    """Build a preexec_fn applying the metadata limits as process rlimits.
+
+    The bwrap backend has no cgroup, so the limits the metadata records are
+    applied to the child itself: address space, processes, file size and CPU
+    time. The wall-clock limit is enforced separately by `timeout=`.
+
+    RLIMIT_NPROC counts every process of the calling uid, not just this run, so
+    it is a ceiling on the uid rather than cgroup-style per-run accounting.
+    """
+    memory_bytes = parse_memory_bytes(memory)
+    max_tasks = int(tasks)
+    cpu_seconds = int(runtime_s)
+
+    def preexec():
+        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+        resource.setrlimit(resource.RLIMIT_NPROC, (max_tasks, max_tasks))
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (DEFAULT_FSIZE_BYTES, DEFAULT_FSIZE_BYTES))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 5))
+
+    return preexec
+
+
+def build_bwrap_command(workdir, command, scratch, source=None):
     argv = [
         "bwrap", "--unshare-all", "--die-with-parent",
         "--proc", "/proc", "--dev", "/dev",
@@ -289,14 +408,21 @@ def build_bwrap_command(workdir, command, scratch):
     for extra in ("/lib", "/lib64", "/bin", "/sbin", "/etc"):
         if os.path.isdir(extra):
             argv += ["--ro-bind", extra, extra]
+    if source and os.path.isdir(source):
+        # Bound at its host path so $SWARM_SOURCE and the default --workdir
+        # source resolve to the same place inside the namespace.
+        argv += ["--ro-bind", source, source]
     argv += ["--bind", scratch, scratch]
     argv += [
         "--tmpfs", "/tmp",
         "--setenv", "HOME", scratch,
         "--setenv", "TMPDIR", scratch,
-        "--chdir", workdir,
-        "/bin/sh", "-c", command,
+        "--setenv", "SWARM_WORKDIR", workdir,
+        "--setenv", "SWARM_COMMAND", command,
     ]
+    if source:
+        argv += ["--setenv", "SWARM_SOURCE", source]
+    argv += ["--chdir", scratch, "/bin/sh", "-c", WRAPPER]
     return argv
 
 
@@ -316,17 +442,42 @@ def cmd_run(args):
     artifacts = artifacts_dir(out_dir, agent_id)
     os.makedirs(scratch, exist_ok=True)
     os.makedirs(artifacts, exist_ok=True)
-    make_traversable(out_dir)
     if backend == "systemd":
+        # Permissions may have been tightened since `create`.
+        problem = check_traversable(out_dir)
+        if problem:
+            return fail(problem)
         # DynamicUser is ephemeral, so it is never the owner of scratch.
-        os.chmod(scratch, 0o1777)
+        scratch_mode = 0o1777
+    else:
+        # bwrap runs as the calling user, who owns the scratch already.
+        scratch_mode = 0o700
+    os.chmod(scratch, scratch_mode)
     os.chmod(artifacts, 0o700)
+
+    controls = metadata.setdefault("sandbox_controls", {})
+    controls["scratch_mode"] = "%o" % scratch_mode
+    controls["limits_enforced_by"] = LIMITS_ENFORCED_BY[backend]
+    save_metadata(out_dir, metadata)
+
+    if scratch_mode & 0o002:
+        print("WARNING: scratch is world-writable (mode %o): %s" % (scratch_mode, scratch))
+        print("         required by systemd DynamicUser, which never owns the directory")
+        print("         on a shared host, keep the run directory inside a path only")
+        print("         trusted users can reach")
+        sys.stdout.flush()
 
     source_dir = metadata.get("source_dir")
     if args.workdir == "scratch" or not source_dir or not os.path.isdir(source_dir):
         workdir = scratch
     else:
         workdir = source_dir
+        if backend == "systemd":
+            # The copy is only reachable if the target was; re-check in case the
+            # permissions changed since `create`.
+            problem = check_traversable(source_dir, need_read=True, label="source copy")
+            if problem:
+                return fail(problem)
 
     limits = metadata.get("sandbox_controls", {}).get("limits", {})
     memory = limits.get("memory", DEFAULT_MEMORY)
@@ -336,10 +487,15 @@ def cmd_run(args):
     if backend == "systemd":
         argv = build_systemd_command(workdir, args.command, scratch, memory, tasks, runtime_s,
                                      source_dir)
-    else:
-        argv = build_bwrap_command(workdir, args.command, scratch)
+        completed = subprocess.run(argv)
+        return completed.returncode
 
-    completed = subprocess.run(argv)
+    argv = build_bwrap_command(workdir, args.command, scratch, source_dir)
+    try:
+        completed = subprocess.run(argv, timeout=int(runtime_s),
+                                   preexec_fn=make_rlimit_preexec(memory, tasks, runtime_s))
+    except subprocess.TimeoutExpired:
+        return fail("run exceeded the %ss wall-clock limit and was killed" % runtime_s)
     return completed.returncode
 
 
