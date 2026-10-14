@@ -13,8 +13,8 @@ yourself. Do only the reading needed to write a self-contained brief, then hand 
 
 Always pass `model` with an alias from the `[secondary_model]` pool. A pool alias may be an effort
 variant (`<alias>@<effort>`); the effort is part of the alias, so pick the variant whose description
-matches the effort the persona needs (high or max for review, security, architecture; low or medium
-for worker and hunter), and do not try to pass an effort separately.
+matches the effort the persona needs (high or max for review, security, architecture; xhigh for a
+DeepSeek worker or hunter, medium for a Sonnet one, never low), and do not try to pass an effort separately.
 
 Rules:
 

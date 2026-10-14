@@ -132,6 +132,17 @@ El comando es un asistente: por cada rol (worker, reviewer, architect, security)
 y después el effort que ese modelo soporta, y al final muestra el resultado y pide confirmación.
 Edita `config.toml` con backup previo y valida el TOML al terminar.
 
+Atajos, para no repasar todo cada vez:
+
+| Comando | Qué hace |
+| --- | --- |
+| `/kimi-swarm:setup quick` | Mantiene los modelos y efforts actuales (recomendado solo donde falte); solo pide la confirmación final |
+| `/kimi-swarm:setup effort` | Mantiene los modelos actuales y pregunta solo el effort de cada rol |
+| `/kimi-swarm:setup <rol>` | Rehace un solo rol (`worker`, `reviewer`, `architect` o `security`) |
+
+El worker nunca se recomienda en `low`: con `deepseek-v4.1-flash` rinde mal. Usá `xhigh` con DeepSeek
+o `medium` con Sonnet.
+
 Cada pregunta admite 4 opciones como máximo, así que por rol se elige primero una **familia** y
 después el **modelo**. Las familias salen de `~/.kimi-code/kimi-swarm.toml` (o
 `$KIMI_CODE_HOME/kimi-swarm.toml`), un archivo por puesto porque los alias cambian entre máquinas:

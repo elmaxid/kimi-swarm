@@ -1,5 +1,6 @@
 ---
-description: Interactive wizard to configure the [secondary_model] pool, choosing model and thinking effort per role
+description: Interactive wizard to configure the [secondary_model] pool, choosing model and thinking effort per role. Modes - quick, effort, or one role (worker, reviewer, architect, security)
+argument-hint: "[quick | effort | worker | reviewer | architect | security]"
 ---
 
 Run an interactive wizard that configures the Kimi Swarm subagent pool in the user's `config.toml`.
@@ -27,6 +28,35 @@ How effort works in the engine (verified in the binary):
 
 Ask the roles in this order, because security depends on the reviewer's choice.
 
+## Modes
+
+Read the first word of `$ARGUMENTS` (below) to pick a mode. Anything else in `$ARGUMENTS` is plain
+context. With no recognised word, run the full wizard.
+
+| Argument | What it does |
+| --- | --- |
+| *(none)* / `full` | Full wizard: family, model and effort for every role. |
+| `quick` | Keep each role's current alias and current effort; use the recommended effort only for a role that has none. No questions until the confirmation. |
+| `effort` | Keep each role's current alias and ask only the effort question, once per role. |
+| `worker`, `reviewer`, `architect`, `security` | Redo that role's three questions and keep the other roles as they are. |
+
+How a role's *current alias* is found: the worker is `[secondary_model].default_model`; for the other
+roles, match the pool descriptions (role word such as review/verificación, arquitectura, security) and
+take the base alias of that entry. If a role has no current alias, ask that role's family and model
+questions even in `quick` and `effort`.
+
+Mode rules:
+
+- A role's current effort is the `default_effort` of its current pool variant. `quick` keeps it;
+  the recommended table in step 3 applies only to roles with no effort yet (and in `effort` mode it
+  only marks the `(Recommended)` option). `quick` skips the family, model, effort and cleanup questions; it keeps existing base pool
+  entries as they are (it does not remove anything) and goes straight to step 5, then confirmation.
+- A single-role mode keeps the other roles' current alias and effort untouched. For `security`, the
+  reviewer's family is taken from the current reviewer alias.
+- Steps 1, 2 (only if a family question will be asked), 5 to 8 always run. The confirmation in step 6
+  is never skipped, in any mode.
+- The worker safeguard below applies in every mode.
+
 ## Steps
 
 1. **Read the state.** The config is `$KIMI_CODE_HOME/config.toml`, default `~/.kimi-code/config.toml`.
@@ -53,7 +83,7 @@ Ask the roles in this order, because security depends on the reviewer's choice.
    - If the file is missing or has no `[families]`, build the families yourself from `[models]`,
      grouping by the name after the provider prefix (claude → Anthropic, codex/gpt → OpenAI, glm,
      deepseek, qwen, kimi and so on), skip image, embedding, rerank, speech and vision-only models,
-     and offer to save the result to that file at the end (step 8). Never create it without asking.
+     and offer to save the result to that file at the end (step 9). Never create it without asking.
    - Show the family order as written in the file. Put the family that holds the role's current alias
      first, even if the file lists it later.
 3. **For each role, in order, ask three questions, one after the other:**
@@ -68,9 +98,11 @@ Ask the roles in this order, because security depends on the reviewer's choice.
      security, reject an answer that is in the reviewer's family and ask again.
    - *Effort*: header = `Effort`, one question for the model just chosen. Read its `support_efforts`
      and offer up to 4 of them, spread across the range (for example `low`, `medium`, `high`, and
-     `max` or the highest supported). Mark one `(Recommended)` and put it first: worker `low` or
-     `medium`, reviewer `high`, architect the highest, security `high`. If the role already has an
-     effort, mark that one `(Current)`. "Other" accepts any other level. Reject, and ask again, any
+     `max` or the highest supported). For the worker, do not offer `low` or lower: use `medium`,
+     `high`, `xhigh` (and `max` if there is room). Mark one `(Recommended)` and put it first:
+     worker `xhigh` for DeepSeek models, `medium` for Claude Sonnet models, `medium` for any other
+     model; reviewer `high`; architect the highest supported; security `high`. If the role already
+     has an effort, mark that one `(Current)`. "Other" accepts any other level. Reject, and ask again, any
      effort that is not in that model's `support_efforts`; never write an unsupported one.
 4. **Ask the cleanup question.** Existing pool entries that are not one of the chosen variants
    (base aliases without effort, such as `provider/model`) can be kept or removed. Ask once, with
@@ -94,10 +126,10 @@ Ask the roles in this order, because security depends on the reviewer's choice.
    default_effort = "max"
 
    [secondary_model]
-   default_model = "litellm/deepseek-v4.1-flash@low"
+   default_model = "litellm/deepseek-v4.1-flash@xhigh"
 
    [secondary_model.models]
-   "litellm/deepseek-v4.1-flash@low" = "Worker y cazador (effort low): implementación, refactors, barrido."
+   "litellm/deepseek-v4.1-flash@xhigh" = "Worker y cazador (effort xhigh): implementación, refactors, barrido."
    "litellm/claude-opus-5@max"       = "Arquitectura y diseño (effort max): lo más profundo."
    ```
 
@@ -120,6 +152,14 @@ Ask the roles in this order, because security depends on the reviewer's choice.
    write `kimi-swarm.toml` with the families you built, so the next run and other machines can start
    from them. Never overwrite an existing file; if it exists without `[families]`, append the table.
    Do not put secrets in it.
+
+## Worker safeguard
+
+A worker on `low`, `minimal` or `none` does poorly (verified with `deepseek-v4.1-flash`). The worker
+effort must be `medium` or higher, and the recommendations are `xhigh` for DeepSeek and `medium` for
+Claude Sonnet. If the user types a lower effort through "Other", or the current worker variant is
+lower, warn once and ask whether to keep it; do not block, since it is the user's decision. The
+same applies to `audit-hunter`, which follows the worker.
 
 ## Constraints to state to the user
 
