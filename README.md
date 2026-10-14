@@ -128,8 +128,23 @@ La forma fácil:
 /kimi-swarm:setup
 ```
 
-El comando lee tus alias de `[models]`, propone una tabla de ruteo y edita `config.toml` con backup
-previo y confirmación. La forma manual:
+El comando es un asistente: por cada rol (worker, reviewer, architect, security) te pregunta el modelo
+y después el effort que ese modelo soporta, y al final muestra el resultado y pide confirmación.
+Edita `config.toml` con backup previo y valida el TOML al terminar.
+
+Cada pregunta admite 4 opciones como máximo, así que por rol se elige primero una **familia** y
+después el **modelo**. Las familias salen de `~/.kimi-code/kimi-swarm.toml` (o
+`$KIMI_CODE_HOME/kimi-swarm.toml`), un archivo por puesto porque los alias cambian entre máquinas:
+
+```toml
+[families]
+"Anthropic"  = ["litellm/claude-opus-5", "litellm/claude-sonnet-5-5", "litellm/claude-haiku-4-5"]
+"OpenAI"     = ["litellm/codex-gpt6-sol", "litellm/gpt-oss:120b"]
+"Uso diario" = ["litellm/deepseek-v4.1-flash", "litellm/glm-5.3-flash", "litellm/glm-5.3"]
+```
+
+Los alias que no existan en `[models]` se ignoran. Si el archivo no existe, el asistente arma las
+familias desde tu `[models]` y te ofrece guardarlas. La forma manual:
 
 ```toml
 [secondary_model]
@@ -156,7 +171,7 @@ Ruteo automático (el agente principal lee la Skill y el system prompt y elige),
 
 | Comando | Qué hace |
 | --- | --- |
-| `/kimi-swarm:setup` | Configura el pool `[secondary_model]` en `config.toml` |
+| `/kimi-swarm:setup` | Asistente interactivo: por rol (worker, reviewer, architect, security) elegís modelo y effort, y escribe el pool `[secondary_model]` en `config.toml` con backup |
 | `/kimi-swarm:review` | Review de un diff/PR con `swarm-review` (modelo fuerte) |
 | `/kimi-swarm:security-audit` | Auditoría ligera de un diff/alcance con `swarm-security` |
 | `/kimi-swarm:audit <repo>` | Workflow completo de 6 fases sobre un repo |
