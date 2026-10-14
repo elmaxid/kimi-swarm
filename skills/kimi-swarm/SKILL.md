@@ -99,6 +99,29 @@ default_model = "provider/fast-coding-model"
 Rules that fail loudly at session startup: every pool alias must resolve to a configured `[models]`
 entry, and `force` cannot be combined with a `models` table.
 
+### Effort per model
+
+The `Agent` tool has no effort parameter. A subagent's thinking effort is
+`[secondary_model].default_effort` if set (one value for every pool model, validated against each),
+otherwise the `default_effort` declared on the chosen alias in `[models]`. To give each model its own
+effort, add an effort variant per (model, effort) and put the variants in the pool:
+
+```toml
+[models."provider/strong-reasoner@max"]
+provider = "provider"
+model = "strong-reasoner"
+max_context_size = 262144
+capabilities = [ "thinking", "tool_use" ]
+support_efforts = [ "low", "medium", "high", "max" ]
+default_effort = "max"
+
+[secondary_model.models]
+"provider/strong-reasoner@max" = "Review and architecture, effort max."
+```
+
+Do not set the global `default_effort` in this mode: it overrides every variant. `/kimi-swarm:setup`
+creates the variants and checks each effort against the model's `support_efforts`.
+
 ## Invocation
 
 Let the main agent route automatically (it reads this skill and the system prompt), or name the

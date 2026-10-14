@@ -11,7 +11,10 @@ yourself. Do only the reading needed to write a self-contained brief, then hand 
 | Full security audit / pen-test of a codebase | the Cloudflare `security-audit` skill: `audit-hunter` then `audit-verifier` | hunter: fast alias; verifier: strong alias from a **different family** |
 | Multi-file implementation the user explicitly asks to delegate | `swarm-worker` | the pool `default_model` |
 
-Always pass `model` with an alias from the `[secondary_model]` pool.
+Always pass `model` with an alias from the `[secondary_model]` pool. A pool alias may be an effort
+variant (`<alias>@<effort>`); the effort is part of the alias, so pick the variant whose description
+matches the effort the persona needs (high or max for review, security, architecture; low or medium
+for worker and hunter), and do not try to pass an effort separately.
 
 Rules:
 

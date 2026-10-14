@@ -428,8 +428,12 @@ config real:
 - `AgentSwarm` es **homogéneo**: un solo `subagent_type` y un solo `model` por enjambre. Para correr
   personas distintas en paralelo, van varias llamadas `Agent` en un mismo mensaje.
 - Los hooks no reescriben argumentos de tool, así que no pueden inyectar el `model`.
-- En el engine v2 actual, `KIMI_SECONDARY_MODEL` / `KIMI_SECONDARY_EFFORT` **no se leen**; la config
-  manda. `KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL` fue eliminada y el pool está siempre activo.
+- El effort tampoco se ata a la persona ni es parámetro del tool. Sale de
+  `[secondary_model].default_effort` (global, validado contra todo el pool) o, si falta, del
+  `default_effort` del alias en `[models]`. Por eso el effort por modelo se logra con **variantes de
+  alias** (`modelo@effort`), que `/kimi-swarm:setup` crea y valida contra `support_efforts`.
+- `KIMI_SECONDARY_MODEL` / `KIMI_SECONDARY_EFFORT` aparecen en el código del engine pero no los
+  usamos: son un solo valor global y la config manda. `KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL` fue eliminada y el pool está siempre activo.
 
 Por eso el binding persona→modelo es **política guiada por prompt** (la matriz de ruteo), no un
 binding duro.
