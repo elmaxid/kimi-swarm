@@ -122,6 +122,21 @@ default_effort = "max"
 Do not set the global `default_effort` in this mode: it overrides every variant. `/kimi-swarm:setup`
 creates the variants and checks each effort against the model's `support_efforts`.
 
+### Using `/kimi-swarm:setup`
+
+| Command | What it does |
+| --- | --- |
+| `/kimi-swarm:setup` | Full wizard: family, model and effort for worker, reviewer, architect and security. |
+| `/kimi-swarm:setup quick` | Keeps current models and efforts; only asks for the final confirmation. |
+| `/kimi-swarm:setup effort` | Keeps current models; asks only the effort of each role. |
+| `/kimi-swarm:setup worker` (or `reviewer`, `architect`, `security`) | Redoes one role and leaves the rest. |
+
+Every mode backs up `config.toml`, validates the result and asks for confirmation before writing.
+Run `/reload` or start a new session afterwards. Security must come from a different family than the
+reviewer. Never run the worker (or `audit-hunter`) at `low` or below: weak models do poorly there; use
+`xhigh` with DeepSeek or `medium` with Claude Sonnet. To verify, spawn one subagent with a variant and
+check its reported thinking level.
+
 ## Invocation
 
 Let the main agent route automatically (it reads this skill and the system prompt), or name the
