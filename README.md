@@ -12,6 +12,7 @@ completo de auditoría de seguridad de Cloudflare, adaptado a Kimi.
 - [Cómo encaja en Kimi Code](#cómo-encaja-en-kimi-code)
 - [Instalación](#instalación)
 - [Setup del pool de modelos](#setup-del-pool-de-modelos)
+- [Sync del catálogo desde el gateway](#sync-del-catálogo-desde-el-gateway)
 - [Uso](#uso)
 - [Personas incluidas](#personas-incluidas)
 - [Auditoría de seguridad completa](#auditoría-de-seguridad-completa)
@@ -172,6 +173,57 @@ Reglas que fallan fuerte al arrancar la sesión:
 - `default_model` es obligatorio si hay tabla `models`, y debe ser una de sus claves.
 - `force = true` exige `default_model` y no se puede combinar con `models`.
 
+## Sync del catálogo desde el gateway
+
+El wizard **no consulta el gateway**: solo lee `[models]`. Si el gateway anuncia un modelo que tu
+`config.toml` no tiene, ese alias no existe todavía, y escribirlo a mano es como se termina con un
+bloque sin `max_context_size` (el motor rechaza arrancar un modelo sin ese campo). Para eso está
+`/kimi-swarm:sync`:
+
+```
+/kimi-swarm:sync [--provider ID] [--refresh-metadata] [--refresh-families] [--dry-run]
+```
+
+El comando resuelve `scripts/sync-models.py` desde la copia gestionada, corre siempre **primero un
+preview** (dry-run, cero escritura), te muestra la tabla y recién después de tu confirmación aplica
+con el hash del plan que aprobaste. La mecánica vive en el script, no en el comando.
+
+| Bandera | Qué agrega |
+| --- | --- |
+| *(ninguna)* | Solo altas: bloques `[models."<provider>/<id>"]` que el gateway anuncia y faltan |
+| `--refresh-metadata` | Además, completa bloques existentes: suma capabilities y efforts que falten, y llena `max_context_size` / `default_effort` **solo si el campo está ausente** |
+| `--refresh-families` | Además, sincroniza `[families]` de `kimi-swarm.toml` |
+| `--provider ID` | Elige el gateway cuando hay más de un `[providers.*]` con `base_url` (sin esto, el script falla y lista los candidatos) |
+| `--dry-run` | Preview explícito; es el comportamiento por defecto |
+| `--apply --expect-plan SHA256` | Escribe, pero solo si el plan actual coincide con el hash que confirmaste |
+
+Qué garantiza:
+
+- **Nunca quita nada.** Las capabilities y los `support_efforts` se unen (un modelo que gana visión
+  en el gateway y no la tenía en el bloque local pasa a tenerla); un escalar presente **no se
+  reescribe**. Dato empírico: el gateway marca `supports_function_calling = true` en 19 de 58
+  modelos y sin embargo varios funcionan con tools, así que un valor local que el gateway no confirma
+  se reporta como *contradicción informativa* y se deja como está.
+- **Nunca borra un bloque de modelo.** Ausente en el gateway es "no anunciado", no "muerto": se
+  reporta como advertencia y sigue.
+- **Clasificación por lista negra.** `mode` viene `null` en la mayoría de las entradas; solo se
+  excluyen los modos no-chat explícitos (`image_generation`, `embedding`, `rerank`, `audio_speech`,
+  `audio_transcription`).
+- **Variantes `@effort`.** Sync no las crea (eso es del wizard): verifica que `default_effort`
+  pertenezca al `support_efforts` efectivo del base y de la variante, y si un grupo lo incumple omite
+  los cambios de ese grupo, lo reporta y sigue con los demás.
+- **Escritura segura.** Editor por líneas acotado (BOM, CRLF, comentarios y todo lo no tocado quedan
+  byte a byte; las claves punteadas o tablas inline fallan cerrado), comparación estructural contra el
+  original antes de escribir, backup con timestamp en `0600`, temporal + `fsync` + reemplazo atómico
+  conservando permisos, y lock exclusivo con revalidación de hashes. Primero el catálogo; si falla la
+  segunda escritura, las familias se restauran y el catálogo válido se conserva.
+- **La key nunca se imprime** ni se pasa por argv ni se copia a otro archivo. El script jamás invoca
+  `kimi provider add` (pisa `api_key` y borra `support_efforts`) ni `kimi provider remove` (borra el
+  provider con todos sus alias).
+- **Códigos de salida**: `0` completo, `1` parcial con advertencias (puede haber aplicado los cambios
+  seguros: lo dice el resumen), `2` argumentos, `3` config/validación, `4` catálogo inaccesible,
+  `5` lock ocupado o plan obsoleto, `6` fallo de escritura.
+
 ## Uso
 
 Ruteo automático (el agente principal lee la Skill y el system prompt y elige), o explícito:
@@ -183,6 +235,7 @@ Ruteo automático (el agente principal lee la Skill y el system prompt y elige),
 | Comando | Qué hace |
 | --- | --- |
 | `/kimi-swarm:setup` | Asistente interactivo: por rol (worker, reviewer, architect, security) elegís modelo y effort, y escribe el pool `[secondary_model]` en `config.toml` con backup |
+| `/kimi-swarm:sync` | Sincroniza `[models]` con el gateway: preview, altas, `--refresh-metadata`, `--refresh-families` |
 | `/kimi-swarm:review` | Review de un diff/PR con `swarm-review` (modelo fuerte) |
 | `/kimi-swarm:security-audit` | Auditoría ligera de un diff/alcance con `swarm-security` |
 | `/kimi-swarm:audit <repo>` | Workflow completo de 6 fases sobre un repo |
@@ -446,6 +499,17 @@ config real:
 - La auto-delegación se midió en 3 escenarios (sin política / pidiendo tool / con política imperativa).
 - Los validadores Python se verificaron contra el Node original: 65/65 conformidad y 273/273
   diferencial byte-idéntico (ver [Validadores en Python](#validadores-en-python-sin-nodejs)).
+- `scripts/sync-models.py` se probó contra un gateway HTTP local de fixture en un `KIMI_CODE_HOME`
+  temporal: **18/18** casos, con `python3 scripts/test_sync_models.py` y con
+  `python3 -m unittest discover -s scripts -p 'test_*.py'`. Cubren alta de un alias dejando el resto
+  byte-idéntico, dry-run sin escrituras, idempotencia en la segunda corrida, unión de capabilities y
+  de `support_efforts` sin quitar nada, contradicciones informativas, grupo `@effort` inválido
+  omitido, `/model/info` 403 → parcial (exit 1), catálogo vacío o timeout → exit 4, modo no-chat
+  excluido y modo nulo aceptado, id malicioso rechazado y reportado escapado, TOML roto → exit 3,
+  lock ocupado y plan obsoleto → exit 5, familias con orden y duplicados preservados, BOM + CRLF.
+  Además, el flujo real (preview → apply → segunda corrida) se corrió a mano sobre un home temporal:
+  el segundo apply dio hashes idénticos y "nada para escribir", y el binario de Kimi cargó la config
+  resultante (llegó hasta el request al gateway, es decir pasó toda la validación de arranque).
 
 ## El límite que define el diseño
 

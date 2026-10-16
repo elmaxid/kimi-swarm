@@ -97,7 +97,10 @@ default_model = "provider/fast-coding-model"
 ```
 
 Rules that fail loudly at session startup: every pool alias must resolve to a configured `[models]`
-entry, and `force` cannot be combined with a `models` table.
+entry, and `force` cannot be combined with a `models` table. When an alias does not resolve because
+the block was never added, run `/kimi-swarm:sync` first (see *Keeping `[models]` in sync with the
+gateway* below) — do not hand-write a block, the engine rejects one without a positive
+`max_context_size`.
 
 ### Effort per model
 
@@ -121,6 +124,24 @@ default_effort = "max"
 
 Do not set the global `default_effort` in this mode: it overrides every variant. `/kimi-swarm:setup`
 creates the variants and checks each effort against the model's `support_efforts`.
+
+### Keeping `[models]` in sync with the gateway
+
+`/kimi-swarm:setup` reads `[models]` and never queries the gateway, so it cannot offer a model that
+`config.toml` does not have yet. `/kimi-swarm:sync` (backed by `scripts/sync-models.py`) does the
+opposite job: it reads the provider's OpenAI-compatible `/v1/models` and `/model/info`, previews the
+diff and, once confirmed, writes it.
+
+| Command | Owns | Never does |
+| --- | --- | --- |
+| `/kimi-swarm:sync` | the `[models.*]` catalog, and the `[families]` table of `kimi-swarm.toml` | create `@effort` variants, edit `[secondary_model]`, delete a model block |
+| `/kimi-swarm:setup` | the `[secondary_model]` pool and the `@effort` variants | talk to the gateway, invent a `[models]` block |
+
+Sync adds only what the gateway announces, widens existing blocks by union (a capability is never
+removed — `supports_function_calling` is unreliable, so an unconfirmed capability is only reported),
+and fills a scalar only when it is absent. It also checks the invariant `default_effort ∈
+support_efforts` on every base+variant group and omits the changes of a broken group instead of
+writing an effort the model does not support.
 
 ### Using `/kimi-swarm:setup`
 

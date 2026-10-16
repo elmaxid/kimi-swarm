@@ -17,6 +17,20 @@ How effort works in the engine (verified in the binary):
   copies the base alias and adds `default_effort = "<effort>"`. The variant goes in the pool and the
   orchestrator picks it with the `model` parameter.
 
+## Keeping the catalog in sync
+
+The wizard only reads `[models]`; it never queries the gateway, and it must not. A model the gateway
+announces but `config.toml` is missing has no alias to offer, and inventing one by hand is how a
+`max_context_size` ends up missing (the engine refuses to start a model without a positive one). So
+before the wizard, run `/kimi-swarm:sync` (or `scripts/sync-models.py --dry-run` and then `--apply`
+with the printed plan hash). It previews the diff, adds the missing blocks, and —with
+`--refresh-metadata`— widens existing blocks without ever removing a capability.
+
+The division of labour: **sync owns the `[models.*]` catalog**, **the wizard owns the
+`[secondary_model]` pool and the `@effort` variants**. Sync never creates a variant and never edits
+the pool; it only checks that `default_effort ∈ support_efforts` still holds in each base+variant
+group, and omits the changes of a group that breaks it.
+
 ## Roles
 
 | Role | Personas it serves | Notes |
@@ -64,6 +78,8 @@ Mode rules:
    `awk '/^\[models\."/{a=$0} /^support_efforts/{print a " " $0}' ~/.kimi-code/config.toml`
    and read the existing `[secondary_model]` section and `[thinking]`. Treat a model as a *base alias*
    when its name has no `@`. If `thinking.enabled = false`, warn that efforts are ignored.
+   If the role the user wants has no alias at all because `[models]` never got that model, stop and
+   point them at `/kimi-swarm:sync` instead of writing a block by hand.
 2. **Build the families.** `AskUserQuestion` takes 2 to 4 options per question, and the user always
    gets an "Other" field, so you cannot list every alias. The wizard therefore asks for a *family*
    first and then a *model* inside it. The families come from the user's preferences file,
